@@ -20,12 +20,13 @@ import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from functools import singledispatch
-from typing import TYPE_CHECKING, Any, Dict, Generic, List, Literal, Optional, Tuple, TypeVar, Union
+from typing import TYPE_CHECKING, Any, Dict, Generic, List, Literal, Optional, Tuple, TypeAlias, TypeVar, Union
 
 from pydantic import Field, field_validator
 from typing_extensions import Annotated
 
 from pyiceberg.exceptions import CommitFailedException
+from pyiceberg.lazy import LazyObject
 from pyiceberg.partitioning import PARTITION_FIELD_ID_START, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table.metadata import SUPPORTED_TABLE_FORMAT_VERSION, TableMetadata, TableMetadataUtil
@@ -239,8 +240,11 @@ class _TableMetadataUpdateContext:
         return len(self._updates) > 0
 
 
+LazyTableMetadata : TypeAlias = LazyObject[TableMetadata]
+
+
 @singledispatch
-def _apply_table_update(update: TableUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _apply_table_update(update: TableUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     """Apply a table update to the table metadata.
 
     Args:
@@ -256,7 +260,7 @@ def _apply_table_update(update: TableUpdate, base_metadata: TableMetadata, conte
 
 
 @_apply_table_update.register(AssignUUIDUpdate)
-def _(update: AssignUUIDUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: AssignUUIDUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if update.uuid == base_metadata.table_uuid:
         return base_metadata
 
@@ -265,7 +269,7 @@ def _(update: AssignUUIDUpdate, base_metadata: TableMetadata, context: _TableMet
 
 
 @_apply_table_update.register(SetLocationUpdate)
-def _(update: SetLocationUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetLocationUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     context.add_update(update)
     return base_metadata.model_copy(update={"location": update.location})
 
@@ -273,9 +277,9 @@ def _(update: SetLocationUpdate, base_metadata: TableMetadata, context: _TableMe
 @_apply_table_update.register(UpgradeFormatVersionUpdate)
 def _(
     update: UpgradeFormatVersionUpdate,
-    base_metadata: TableMetadata,
+    base_metadata: LazyTableMetadata,
     context: _TableMetadataUpdateContext,
-) -> TableMetadata:
+) -> LazyTableMetadata:
     if update.format_version > SUPPORTED_TABLE_FORMAT_VERSION:
         raise ValueError(f"Unsupported table format version: {update.format_version}")
     elif update.format_version < base_metadata.format_version:
@@ -286,11 +290,11 @@ def _(
     updated_metadata = base_metadata.model_copy(update={"format_version": update.format_version})
 
     context.add_update(update)
-    return TableMetadataUtil._construct_without_validation(updated_metadata)
+    return LazyTableMetadataUtil._construct_without_validation(updated_metadata)
 
 
 @_apply_table_update.register(SetPropertiesUpdate)
-def _(update: SetPropertiesUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetPropertiesUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if len(update.updates) == 0:
         return base_metadata
 
@@ -302,7 +306,7 @@ def _(update: SetPropertiesUpdate, base_metadata: TableMetadata, context: _Table
 
 
 @_apply_table_update.register(RemovePropertiesUpdate)
-def _(update: RemovePropertiesUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: RemovePropertiesUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if len(update.removals) == 0:
         return base_metadata
 
@@ -315,7 +319,7 @@ def _(update: RemovePropertiesUpdate, base_metadata: TableMetadata, context: _Ta
 
 
 @_apply_table_update.register(AddSchemaUpdate)
-def _(update: AddSchemaUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: AddSchemaUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     metadata_updates: Dict[str, Any] = {
         "last_column_id": max(base_metadata.last_column_id, update.schema_.highest_field_id),
         "schemas": base_metadata.schemas + [update.schema_],
@@ -326,7 +330,7 @@ def _(update: AddSchemaUpdate, base_metadata: TableMetadata, context: _TableMeta
 
 
 @_apply_table_update.register(SetCurrentSchemaUpdate)
-def _(update: SetCurrentSchemaUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetCurrentSchemaUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     new_schema_id = update.schema_id
     if new_schema_id == -1:
         # The last added schema should be in base_metadata.schemas at this point
@@ -346,7 +350,7 @@ def _(update: SetCurrentSchemaUpdate, base_metadata: TableMetadata, context: _Ta
 
 
 @_apply_table_update.register(AddPartitionSpecUpdate)
-def _(update: AddPartitionSpecUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: AddPartitionSpecUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     for spec in base_metadata.partition_specs:
         if spec.spec_id == update.spec.spec_id:
             raise ValueError(f"Partition spec with id {spec.spec_id} already exists: {spec}")
@@ -364,7 +368,7 @@ def _(update: AddPartitionSpecUpdate, base_metadata: TableMetadata, context: _Ta
 
 
 @_apply_table_update.register(SetDefaultSpecUpdate)
-def _(update: SetDefaultSpecUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetDefaultSpecUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     new_spec_id = update.spec_id
     if new_spec_id == -1:
         new_spec_id = max(spec.spec_id for spec in base_metadata.partition_specs)
@@ -386,7 +390,7 @@ def _(update: SetDefaultSpecUpdate, base_metadata: TableMetadata, context: _Tabl
 
 
 @_apply_table_update.register(AddSnapshotUpdate)
-def _(update: AddSnapshotUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: AddSnapshotUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if len(base_metadata.schemas) == 0:
         raise ValueError("Attempting to add a snapshot before a schema is added")
     elif len(base_metadata.partition_specs) == 0:
@@ -417,7 +421,7 @@ def _(update: AddSnapshotUpdate, base_metadata: TableMetadata, context: _TableMe
 
 
 @_apply_table_update.register(SetSnapshotRefUpdate)
-def _(update: SetSnapshotRefUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetSnapshotRefUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     snapshot_ref = SnapshotRef(
         snapshot_id=update.snapshot_id,
         snapshot_ref_type=update.type,
@@ -456,7 +460,7 @@ def _(update: SetSnapshotRefUpdate, base_metadata: TableMetadata, context: _Tabl
 
 
 @_apply_table_update.register(AddSortOrderUpdate)
-def _(update: AddSortOrderUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: AddSortOrderUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     context.add_update(update)
     return base_metadata.model_copy(
         update={
@@ -468,9 +472,9 @@ def _(update: AddSortOrderUpdate, base_metadata: TableMetadata, context: _TableM
 @_apply_table_update.register(SetDefaultSortOrderUpdate)
 def _(
     update: SetDefaultSortOrderUpdate,
-    base_metadata: TableMetadata,
+    base_metadata: LazyTableMetadata,
     context: _TableMetadataUpdateContext,
-) -> TableMetadata:
+) -> LazyTableMetadata:
     new_sort_order_id = update.sort_order_id
     if new_sort_order_id == -1:
         # The last added sort order should be in base_metadata.sort_orders at this point
@@ -490,7 +494,7 @@ def _(
 
 
 @_apply_table_update.register(SetStatisticsUpdate)
-def _(update: SetStatisticsUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: SetStatisticsUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if update.snapshot_id != update.statistics.snapshot_id:
         raise ValueError("Snapshot id in statistics does not match the snapshot id in the update")
 
@@ -501,7 +505,7 @@ def _(update: SetStatisticsUpdate, base_metadata: TableMetadata, context: _Table
 
 
 @_apply_table_update.register(RemoveStatisticsUpdate)
-def _(update: RemoveStatisticsUpdate, base_metadata: TableMetadata, context: _TableMetadataUpdateContext) -> TableMetadata:
+def _(update: RemoveStatisticsUpdate, base_metadata: LazyTableMetadata, context: _TableMetadataUpdateContext) -> LazyTableMetadata:
     if not any(stat.snapshot_id == update.snapshot_id for stat in base_metadata.statistics):
         raise ValueError(f"Statistics with snapshot id {update.snapshot_id} does not exist")
 
@@ -512,11 +516,11 @@ def _(update: RemoveStatisticsUpdate, base_metadata: TableMetadata, context: _Ta
 
 
 def update_table_metadata(
-    base_metadata: TableMetadata,
+    base_metadata: LazyTableMetadata,
     updates: Tuple[TableUpdate, ...],
     enforce_validation: bool = False,
     metadata_location: Optional[str] = None,
-) -> TableMetadata:
+) -> LazyTableMetadata:
     """Update the table metadata with the given updates in one transaction.
 
     Args:
@@ -542,12 +546,12 @@ def update_table_metadata(
             new_metadata = new_metadata.model_copy(update={"last_updated_ms": datetime_to_millis(datetime.now().astimezone())})
 
     if enforce_validation:
-        return TableMetadataUtil.parse_obj(new_metadata.model_dump())
+        return LazyTableMetadataUtil.parse_obj(new_metadata.model_dump())
     else:
         return new_metadata.model_copy(deep=True)
 
 
-def _update_table_metadata_log(base_metadata: TableMetadata, metadata_location: str, last_updated_ms: int) -> TableMetadata:
+def _update_table_metadata_log(base_metadata: LazyTableMetadata, metadata_location: str, last_updated_ms: int) -> LazyTableMetadata:
     from pyiceberg.table import TableProperties
 
     """
