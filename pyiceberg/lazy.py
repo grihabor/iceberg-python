@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import ItemsView, MutableMapping
-from typing import Any, Final, Iterator, Mapping, TypeVar
+from typing import Any, Final, Iterator, Mapping, Sequence, TypeVar, overload
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
@@ -70,3 +70,59 @@ class LazyDict(MutableMapping[_KT, _VT]):
 
     def __len__(self) -> int:
         return sum(1 for _ in self.items())
+
+
+_T = TypeVar("_T")
+
+
+class LazyList(MutableSequence[_T]):
+    def __init__(self, s: MutableSequence[_T], /) -> None:
+        self._base = s
+        # sorted list of removed indices
+        self._removed_indices: list[int] = []
+
+    def __getitem__(self, i: int, /) -> _T:
+        if i < 0:
+            raise NotImplementedError
+
+        offset = 0
+        for r in self._removed_indices:
+            if r < i:
+                offset += 1
+                continue
+            if r == i:
+                raise IndexError(i)
+            break
+
+        return self._base[i - offset]
+
+    def __iter__(self) -> Iterator[_T]:
+        r = 0
+        for i, value in enumerate(self._base):
+            if r < len(self._removed_indices) and i == self._removed_indices[r]:
+                r += 1
+                continue
+            yield value
+
+    def __len__(self) -> int:
+        return len(self._base) - len(self._removed_indices)
+
+    def remove(self, v: _T, /) -> None:
+        for i, value in enumerate(self):
+            if value == v:
+                self._removed_indices.append(i)
+        self._removed_indices.sort()
+
+
+@overload
+def make_lazy(obj: Mapping[_KT, _VT], /) -> LazyDict[_KT, _VT]:
+    pass
+
+
+@overload
+def make_lazy(obj: Sequence[_VT], /) -> LazyList[_VT]:
+    pass
+
+
+def make_lazy(obj: Any, /) -> Any:
+    pass
