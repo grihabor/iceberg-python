@@ -26,7 +26,6 @@ from pydantic import Field, field_validator
 from typing_extensions import Annotated
 
 from pyiceberg.exceptions import CommitFailedException
-from pyiceberg.lazy import LazyObject
 from pyiceberg.partitioning import PARTITION_FIELD_ID_START, PartitionSpec
 from pyiceberg.schema import Schema
 from pyiceberg.table.metadata import SUPPORTED_TABLE_FORMAT_VERSION, TableMetadata, TableMetadataUtil
@@ -240,7 +239,7 @@ class _TableMetadataUpdateContext:
         return len(self._updates) > 0
 
 
-LazyTableMetadata : TypeAlias = LazyObject[TableMetadata]
+LazyTableMetadata : TypeAlias = TableMetadata
 
 
 @singledispatch
