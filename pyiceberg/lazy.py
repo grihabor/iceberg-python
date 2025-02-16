@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import ItemsView, MutableMapping
-from typing import Any, Final, Iterator, Mapping, Sequence, TypeVar, overload
+from typing import Any, Final, Iterator, Mapping, MutableSequence, Sequence, TypeVar, overload
 
 _KT = TypeVar("_KT")
 _VT = TypeVar("_VT")
@@ -79,14 +80,16 @@ class LazyList(MutableSequence[_T]):
     def __init__(self, s: MutableSequence[_T], /) -> None:
         self._base = s
         # sorted list of removed indices
-        self._removed_indices: list[int] = []
+        self._removes: list[int] = []
+        self._updates: dict[int, _T] = {}
+        self._appends: list[_T] = []
 
     def __getitem__(self, i: int, /) -> _T:
         if i < 0:
             raise NotImplementedError
 
         offset = 0
-        for r in self._removed_indices:
+        for r in self._removes:
             if r < i:
                 offset += 1
                 continue
@@ -96,22 +99,60 @@ class LazyList(MutableSequence[_T]):
 
         return self._base[i - offset]
 
+    def __setitem__(self, index: int, value: _T) -> None:
+        if index < 0:
+            raise NotImplementedError
+
+        removed_index = next((i for i, r in enumerate(self._removes) if r == index), None)
+        if removed_index is not None:
+            del self._removes[removed_index]
+        self._updates[index] = value
+
+    def __delitem__(self, index: int) -> None:
+        if index < 0:
+            raise NotImplementedError
+
+        r, offset = 0, None
+        while offset != 0:
+            offset = bisect_left(self._removes[r:], index)
+            index, r = index + offset, r + offset
+
+        if r == len(self._removes):
+            self._removes.append(index)
+            return
+
+        if self._removes[r] == index:
+            raise KeyError(index)
+
+        self._removes.insert(r, index)
+
     def __iter__(self) -> Iterator[_T]:
         r = 0
         for i, value in enumerate(self._base):
-            if r < len(self._removed_indices) and i == self._removed_indices[r]:
+            if r < len(self._removes) and i == self._removes[r]:
                 r += 1
                 continue
+            if (updated := self._updates.get(i, _MISSING)) is not _MISSING:
+                yield updated
+                continue
             yield value
+        yield from self._appends
 
     def __len__(self) -> int:
-        return len(self._base) - len(self._removed_indices)
+        return len(self._base) - len(self._removes)
+
+    def append(self, v: _T, /) -> None:
+        self._appends.append(v)
+
+    def insert(self, index: int, value: _T) -> None:
+        raise NotImplementedError
 
     def remove(self, v: _T, /) -> None:
+        """Remove the first item from the list whose value is equal to x. It raises a ValueError if there is no such item."""
         for i, value in enumerate(self):
             if value == v:
-                self._removed_indices.append(i)
-        self._removed_indices.sort()
+                del self[i]
+                return
 
 
 @overload
