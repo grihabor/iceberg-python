@@ -49,3 +49,10 @@ def test_lazy_list_del(original: list[int], base: list[int]):
     del l[1]
     assert list(l) == [1, 3]
     assert base == original
+
+
+def test_lazy_list_insert(original: list[int], base: list[int]):
+    l = LazyList(base)
+    l.insert(1, 4)
+    assert list(l) == [1, 4, 2, 3]
+    assert base == original
